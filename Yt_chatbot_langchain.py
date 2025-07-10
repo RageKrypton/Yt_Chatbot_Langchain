@@ -1,3 +1,4 @@
+import streamlit as st
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -9,31 +10,33 @@ from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
-video_id = "Gfr50f6ZBvo" # only the ID, not full URL
-try:
-    # If you don’t care which language, this returns the “best” one
-    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
+st.title("🎬 YouTube Chatbot using Langchain")
+st.write("Ask questions about any YouTube video (with captions). Just enter the video ID below!")
 
-    # Flatten it to plain text
-    transcript = " ".join(chunk["text"] for chunk in transcript_list)
-    print(transcript)
+video_id = st.text_input("Enter YouTube Video ID (e.g., Gfr50f6ZBvo):")
 
-except TranscriptsDisabled:
-    print("No captions available for this video.")
-    exit()
+if 'main_chain' not in st.session_state:
+    st.session_state.main_chain = None
 
-splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-chunks = splitter.create_documents([transcript])
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-vector_store = FAISS.from_documents(chunks, embeddings)
+if st.button("Load Video Transcript"):
+    try:
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
+        transcript = " ".join(chunk["text"] for chunk in transcript_list).strip()
 
-retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = splitter.create_documents([transcript])
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        vector_store = FAISS.from_documents(chunks, embeddings)
+        retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
-prompt = PromptTemplate(
-    template="""
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+
+        prompt = PromptTemplate(
+            template="""
 You are a helpful assistant.
 Answer ONLY from the provided transcript context.
 If the context is insufficient, just say you don't know.
@@ -46,20 +49,40 @@ Question:
 ---------
 {question}
 """,
-    input_variables=['context', 'question']
-)
+            input_variables=['context', 'question']
+        )
 
-def format_docs(retrieved_docs):
-    context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
-    return context_text
+        def format_docs(retrieved_docs):
+            return "\n\n".join(doc.page_content for doc in retrieved_docs)
 
-parallel_chain = RunnableParallel({
-    'context': retriever | RunnableLambda(format_docs),
-    'question': RunnablePassthrough()
-})
+        parallel_chain = RunnableParallel({
+            'context': retriever | RunnableLambda(format_docs),
+            'question': RunnablePassthrough()
+        })
 
-parser = StrOutputParser()
+        parser = StrOutputParser()
+        main_chain = parallel_chain | prompt | llm | parser
 
-main_chain = parallel_chain | prompt | llm | parser
+        st.session_state.main_chain = main_chain
+        st.success("Transcript loaded successfully! You can now chat below.")
 
-main_chain.invoke('Can you summarize the video')
+    except TranscriptsDisabled:
+        st.error("This video has no captions available.")
+    except Exception as e:
+        st.error(f"Error fetching transcript: {e}")
+
+if st.session_state.main_chain:
+    user_input = st.text_input("Ask a question about the video:")
+    if st.button("Send"):
+        if user_input:
+            response = st.session_state.main_chain.invoke(user_input)
+            st.session_state.chat_history.append(("You", user_input))
+            st.session_state.chat_history.append(("Bot", response))
+
+if st.session_state.chat_history:
+    st.subheader("Chat History:")
+    for sender, message in st.session_state.chat_history:
+        if sender == "You":
+            st.markdown(f"**You:** {message}")
+        else:
+            st.markdown(f"**Bot:** {message}")
