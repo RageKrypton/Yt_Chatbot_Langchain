@@ -20,6 +20,7 @@ try:
 
 except TranscriptsDisabled:
     print("No captions available for this video.")
+    exit()
 
 splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = splitter.create_documents([transcript])
@@ -33,22 +34,24 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
 prompt = PromptTemplate(
     template="""
-      You are a helpful assistant.
-      Answer ONLY from the provided transcript context.
-      If the context is insufficient, just say you don't know.
+You are a helpful assistant.
+Answer ONLY from the provided transcript context.
+If the context is insufficient, just say you don't know.
 
-      {context}
-      Question: {question}
-    """,
-    input_variables = ['context', 'question']
+Transcript Context:
+-------------------
+{context}
+
+Question:
+---------
+{question}
+""",
+    input_variables=['context', 'question']
 )
 
-question = "is the topic of nuclear fusion discussed in this video? if yes then what was discussed"
-retrieved_docs = retriever.invoke(question)
-
 def format_docs(retrieved_docs):
-  context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
-  return context_text
+    context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
+    return context_text
 
 parallel_chain = RunnableParallel({
     'context': retriever | RunnableLambda(format_docs),
